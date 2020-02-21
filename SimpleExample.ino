@@ -24,9 +24,7 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
 const char* AWS_endpoint = "a3rk99uqf1x61g-ats.iot.us-east-1.amazonaws.com"; //MQTT broker ip
-
-
-void callback(char* topic, byte* payload, unsigned int length) {
+void publish_callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
@@ -37,11 +35,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 bool loadCfgFile() {
-  bool loadCfg = true;
-   if (!SPIFFS.begin()) {
-    Serial.println("Failed to mount file system");
-    return false;
-  }
+    bool loadCfg = true;
+    char c;
+    byte len = 0;
+    byte buf[128];
+    char *str = &ssid[0];
+    byte index = 0;
+    byte ssid_start_position = 0;
+    byte ssid_end_position = 0;
+    bool ssid_is_null = true;
+
   if(!SPIFFS.exists(cfgFile))
   {
     loadCfg = false;
@@ -49,46 +52,73 @@ bool loadCfgFile() {
   else
   {
     File file = SPIFFS.open(cfgFile, "r");
-    char ch;
-    byte len = 0;
-    byte buf[64];
-    char *str = &ssid[0];
-    byte index = 0;
     file.read(buf, len);
-    do
+    if(len > 0)
     {
-      c = buf[index];
-      if(c = ' ')
+      while (index < len)
       {
-        str[index] = 0x00; /* Add null character to end of string */
-        str = password;
-        index = 0;
+        if(buf[index] == ' ')
+        {
+          if(ssid_is_null == true)
+          {
+            /* copy for ssid */
+            ssid_start_position = (ssid_start_position == 0 )? index: ssid_start_position;
+            ssid_end_position = (ssid_start_position < index )? index : ssid_end_position;
+          }
+          else
+          {
+            /* copy for password */
+            password_start_position = (password_start_position == 0 )? index: password_start_position;
+            password_end_position = (password_start_position < index )? index : password_end_position;
+          }
+        }
+
+        if(ssid_end_position != 0)
+        {
+          /* complete copy wifi ssid */
+          ssid_is_null = false;
+        }
       }
-      else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
-      {
-        str[index] = c;
+
+      /* Copy wifi ssid, pass to ram buffer */
+      if(ssid_end_position > ssid_start_position && password_end_position > password_start_position)
+      { 
+          /* copy wifi ssid */
+          for(byte idx= 0;idx < (ssid_start_position - ssid_start_position); ++idx)
+          {
+            ssid[idx] = buf[ssid_start_position + i];
+          }
+          /* copy password */
+          for(byte idx= 0;idx < (password_start_position - password_start_position); ++idx)
+          {
+            password[idx] = buf[password_start_position + i];
+          }
       }
       else
       {
-        break;
+        /* file is error */
+        loadCfg = false;
       }
-      ++index;;
-    } while(index < len);
+    }
+    else
+    {
+      /* file is empty */
+      loadCfg = false;
+    }
     file.close();  
   }
-  SPIFFS.end();
   return loadCfg;
 }
 
 /** Store WLAN credentials to EEPROM */
 void saveCfgFile() {
   File f = SPIFFS.open(cfgFile, "w");
-  fprintf(f, "%s%s", ssid, password);
+  fprintf(f, "SSID: %s PASS: %s ", ssid, password);
   fclose(f);
 }
 
 WiFiClientSecure espClient;
-PubSubClient client(AWS_endpoint, 8883, callback, espClient); //set  MQTT port number to 8883 as per //standard
+PubSubClient client(AWS_endpoint, 8883, publish_callback, espClient); //set  MQTT port number to 8883 as per //standard
 long lastMsg = 0;
 char msg[50];
 int value = 0;
@@ -149,11 +179,6 @@ void reconnect() {
 
 void connectAws()
 {
-   if (!SPIFFS.begin()) {
-    Serial.println("Failed to mount file system");
-    return;
-  }
-
   Serial.print("Heap: "); Serial.println(ESP.getFreeHeap());
 
   // Load certificate file
@@ -207,6 +232,12 @@ void setup() {
 
   Serial.begin(115200);
   Serial.setDebugOutput(true);
+  
+  if (!SPIFFS.begin()) {
+    Serial.println("Failed to mount file system");
+    return;
+  }
+
   if(true == loadCfgFile())
   {
       setup_wifi();
